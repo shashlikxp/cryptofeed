@@ -165,7 +165,7 @@ _feed_to_exchange_map = {
         COINBASE: 'ticker',
         BITMEX: 'quote',
         KRAKEN: TICKER,
-        KRAKEN_FUTURES: 'ticker_lite',
+        KRAKEN_FUTURES: 'ticker',   # 'ticker_lite' does not provide funding or open interest
         BINANCE: 'ticker',
         BINANCE_US: 'ticker',
         BINANCE_JERSEY: 'ticker',
@@ -212,6 +212,9 @@ _feed_to_exchange_map = {
     },
     INSTRUMENT: {
         BITMEX: 'instrument'
+    },
+    OPEN_INTEREST: {
+        KRAKEN_FUTURES: 'ticker'
     }
 }
 

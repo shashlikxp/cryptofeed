@@ -12,7 +12,7 @@ from decimal import Decimal
 from sortedcontainers import SortedDict as sd
 
 from cryptofeed.feed import Feed
-from cryptofeed.defines import TRADES, BUY, SELL, BID, ASK, TICKER, FUNDING, L2_BOOK, KRAKEN_FUTURES
+from cryptofeed.defines import TRADES, BUY, SELL, BID, ASK, TICKER, FUNDING, L2_BOOK, OPEN_INTEREST, KRAKEN_FUTURES
 from cryptofeed.standards import timestamp_normalize
 
 LOG = logging.getLogger('feedhandler')
@@ -35,6 +35,11 @@ class KrakenFutures(Feed):
                 raise ValueError(f"{pair} is not active on {self.id}")
 
         self.__reset()
+
+        # local states, generate callback only if ticker/funding/open_interest data has changed
+        self.__previous_ticker = {}
+        self.__previous_funding = {}
+        self.__previous_open_interest = {}
 
     def __reset(self):
         self.l2_book = {}
@@ -93,7 +98,18 @@ class KrakenFutures(Feed):
             "maturityTime": 0
         }
         """
-        await self.callback(TICKER, feed=self.id, pair=pair, bid=msg['bid'], ask=msg['ask'], timestamp=timestamp)
+
+        cb = {'feed': self.id,
+              'pair': pair,
+              'timestamp': timestamp_normalize(self.id, msg['time']),
+              'bid': msg['bid'],
+              'ask': msg['ask']}
+
+        current_ticker = {key: cb[key] for key in ['ask', 'bid'] if key in cb}
+        if (cb['pair'] not in self.__previous_ticker) or (cb['pair'] in self.__previous_ticker and self.__previous_ticker[cb['pair']] != current_ticker):
+            self.__previous_ticker[cb['pair']] = current_ticker
+            await self.callback(TICKER, **cb)
+        # await self.callback(TICKER, feed=self.id, pair=pair, bid=msg['bid'], ask=msg['ask'], timestamp=timestamp)
 
     async def _book_snapshot(self, msg: dict, pair: str, timestamp: float):
         """
@@ -152,30 +168,48 @@ class KrakenFutures(Feed):
 
         await self.book_callback(self.l2_book[pair], L2_BOOK, pair, False, delta, timestamp)
 
+
     async def _funding(self, msg: dict, pair: str):
         if msg['tag'] == 'perpetual':
-            await self.callback(FUNDING,
-                                feed=self.id,
-                                pair=pair,
-                                timestamp=timestamp_normalize(self.id, msg['time']),
-                                tag=msg['tag'],
-                                rate=msg['funding_rate'],
-                                rate_prediction=msg['funding_rate_prediction'],
-                                relative_rate=msg['relative_funding_rate'],
-                                relative_rate_prediction=msg['relative_funding_rate_prediction'],
-                                next_rate_timestamp=timestamp_normalize(self.id, msg['next_funding_rate_time']))
-        else:
-            await self.callback(FUNDING,
-                                feed=self.id,
-                                pair=pair,
-                                timestamp=timestamp_normalize(self.id, msg['time']),
-                                tag=msg['tag'],
-                                premium=msg['premium'],
-                                maturity_timestamp=timestamp_normalize(self.id, msg['maturityTime']))
+            cb = {'feed': self.id,
+                  'pair': pair,
+                  'timestamp': timestamp_normalize(self.id, msg['time']),
+                  'tag': msg['tag'],
+                  'premium': msg['premium'],
+                  'absolute_rate': msg['funding_rate'],
+                  'absolute_rate_prediction': msg['funding_rate_prediction'],
+                  'relative_rate': msg['relative_funding_rate'],
+                  'relative_rate_prediction': msg['relative_funding_rate_prediction'],
+                  'next_rate_timestamp': timestamp_normalize(self.id, msg['next_funding_rate_time'])}
+            current_funding = {key: cb[key] for key in ['premium', 'absolute_rate', 'absolute_rate_prediction', 'relative_rate', 'relative_rate_prediction'] if key in cb}
+            if (cb['pair'] not in self.__previous_funding) or (cb['pair'] in self.__previous_funding and self.__previous_funding[cb['pair']] != current_funding):
+                self.__previous_funding[cb['pair']] = current_funding
+                await self.callback(FUNDING, **cb)
+        else:   # fixed maturity contracts (week, month or quarter)
+            cb = {'feed': self.id,
+                  'pair': pair,
+                  'timestamp': timestamp_normalize(self.id, msg['time']),
+                  'tag': msg['tag'],
+                  'premium': msg['premium'],
+                  'maturity_timestamp': timestamp_normalize(self.id, msg['maturityTime'])}
+            current_funding = {key: cb[key] for key in ['premium'] if key in cb}
+            if (cb['pair'] not in self.__previous_funding) or (cb['pair'] in self.__previous_funding and self.__previous_funding[cb['pair']] != current_funding):
+                self.__previous_funding[cb['pair']] = current_funding
+                await self.callback(FUNDING, **cb)
+
+
+    async def _open_interest(self, msg: dict, pair: str):
+        cb = {'feed': self.id,
+              'pair': pair,
+              'timestamp': timestamp_normalize(self.id, msg['time']),
+              'openInterest': msg['openInterest']}
+        current_open_interest = {key: cb[key] for key in ['openInterest'] if key in cb}
+        if (cb['pair'] not in self.__previous_open_interest) or (cb['pair'] in self.__previous_open_interest and self.__previous_open_interest[cb['pair']] != current_open_interest):
+            self.__previous_open_interest[cb['pair']] = current_open_interest
+            await self.callback(OPEN_INTEREST, **cb)
 
     async def message_handler(self, msg: str, timestamp: float):
         msg = json.loads(msg, parse_float=Decimal)
-
         if 'event' in msg:
             if msg['event'] == 'info':
                 return
@@ -188,10 +222,10 @@ class KrakenFutures(Feed):
                 await self._trade(msg, msg['product_id'])
             elif msg['feed'] == 'trade_snapshot':
                 return
-            elif msg['feed'] == 'ticker_lite':
-                await self._ticker(msg, msg['product_id'], timestamp)
             elif msg['feed'] == 'ticker':
+                await self._ticker(msg, msg['product_id'], timestamp)
                 await self._funding(msg, msg['product_id'])
+                await self._open_interest(msg, msg['product_id'])
             elif msg['feed'] == 'book_snapshot':
                 await self._book_snapshot(msg, msg['product_id'], timestamp)
             elif msg['feed'] == 'book':
