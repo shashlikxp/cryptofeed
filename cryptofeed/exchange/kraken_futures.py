@@ -76,11 +76,11 @@ class KrakenFutures(Feed):
         """
         await self.callback(TRADES, feed=self.id,
                             pair=pair,
-                            side=BUY if msg['side'] == 'buy' else SELL,
-                            amount=Decimal(msg['qty']),
-                            price=Decimal(msg['price']),
-                            order_id=msg['uid'],
-                            timestamp=timestamp_normalize(self.id, msg['time']))
+                            side=BUY if msg.get('side') == 'buy' else SELL,
+                            amount=Decimal(msg['qty']) if 'qty' in msg else None,
+                            price=Decimal(msg['price']) if 'price' in msg else None,
+                            order_id=msg.get('uid'),
+                            timestamp=timestamp_normalize(self.id, msg.get('time')))
 
     async def _ticker(self, msg: dict, pair: str, timestamp: float):
         """
@@ -101,13 +101,13 @@ class KrakenFutures(Feed):
 
         cb = {'feed': self.id,
               'pair': pair,
-              'timestamp': timestamp_normalize(self.id, msg['time']),
-              'bid': msg['bid'],
-              'ask': msg['ask']}
+              'timestamp': timestamp_normalize(self.id, msg.get('time')),
+              'bid': msg.get('bid'),
+              'ask': msg.get('ask')}
 
         current_ticker = {key: cb[key] for key in ['ask', 'bid'] if key in cb}
-        if (cb['pair'] not in self.__previous_ticker) or (cb['pair'] in self.__previous_ticker and self.__previous_ticker[cb['pair']] != current_ticker):
-            self.__previous_ticker[cb['pair']] = current_ticker
+        if (pair not in self.__previous_ticker) or (pair in self.__previous_ticker and self.__previous_ticker[pair] != current_ticker):
+            self.__previous_ticker[pair] = current_ticker
             await self.callback(TICKER, **cb)
         # await self.callback(TICKER, feed=self.id, pair=pair, bid=msg['bid'], ask=msg['ask'], timestamp=timestamp)
 
@@ -136,8 +136,8 @@ class KrakenFutures(Feed):
         }
         """
         self.l2_book[pair] = {
-            BID: sd({Decimal(update['price']): Decimal(update['qty']) for update in msg['bids']}),
-            ASK: sd({Decimal(update['price']): Decimal(update['qty']) for update in msg['asks']})
+            BID: sd({Decimal(update['price']): Decimal(update['qty']) for update in msg.get('bids')}),  # TODO: handle this if 'price' or 'qty' not available
+            ASK: sd({Decimal(update['price']): Decimal(update['qty']) for update in msg.get('asks')})
         }
         await self.book_callback(self.l2_book[pair], L2_BOOK, pair, True, None, timestamp)
 
@@ -155,7 +155,7 @@ class KrakenFutures(Feed):
         }
         """
         delta = {BID: [], ASK: []}
-        s = BID if msg['side'] == 'buy' else ASK
+        s = BID if msg['side'] == 'buy' else ASK    # TODO: continue here: what if neither buy nor sell
         price = Decimal(msg['price'])
         amount = Decimal(msg['qty'])
 
@@ -175,26 +175,26 @@ class KrakenFutures(Feed):
                   'pair': pair,
                   'timestamp': timestamp_normalize(self.id, msg['time']),
                   'tag': msg['tag'],
-                  'premium': msg['premium'],
-                  'absolute_rate': msg['funding_rate'],
-                  'absolute_rate_prediction': msg['funding_rate_prediction'],
-                  'relative_rate': msg['relative_funding_rate'],
-                  'relative_rate_prediction': msg['relative_funding_rate_prediction'],
+                  'premium': msg.get('premium'),
+                  'absolute_rate': msg.get('funding_rate'),
+                  'absolute_rate_prediction': msg.get('funding_rate_prediction'),
+                  'relative_rate': msg.get('relative_funding_rate'),
+                  'relative_rate_prediction': msg.get('relative_funding_rate_prediction'),  # this is sometimes None (no prediction)
                   'next_rate_timestamp': timestamp_normalize(self.id, msg['next_funding_rate_time'])}
             current_funding = {key: cb[key] for key in ['premium', 'absolute_rate', 'absolute_rate_prediction', 'relative_rate', 'relative_rate_prediction'] if key in cb}
-            if (cb['pair'] not in self.__previous_funding) or (cb['pair'] in self.__previous_funding and self.__previous_funding[cb['pair']] != current_funding):
-                self.__previous_funding[cb['pair']] = current_funding
+            if (pair not in self.__previous_funding) or (pair in self.__previous_funding and self.__previous_funding[pair] != current_funding):
+                self.__previous_funding[pair] = current_funding
                 await self.callback(FUNDING, **cb)
         else:   # fixed maturity contracts (week, month or quarter)
             cb = {'feed': self.id,
                   'pair': pair,
                   'timestamp': timestamp_normalize(self.id, msg['time']),
-                  'tag': msg['tag'],
-                  'premium': msg['premium'],
+                  'tag': msg.get('tag'),
+                  'premium': msg.get('premium'),
                   'maturity_timestamp': timestamp_normalize(self.id, msg['maturityTime'])}
             current_funding = {key: cb[key] for key in ['premium'] if key in cb}
-            if (cb['pair'] not in self.__previous_funding) or (cb['pair'] in self.__previous_funding and self.__previous_funding[cb['pair']] != current_funding):
-                self.__previous_funding[cb['pair']] = current_funding
+            if (pair not in self.__previous_funding) or (pair in self.__previous_funding and self.__previous_funding[pair] != current_funding):
+                self.__previous_funding[pair] = current_funding
                 await self.callback(FUNDING, **cb)
 
 
@@ -202,10 +202,10 @@ class KrakenFutures(Feed):
         cb = {'feed': self.id,
               'pair': pair,
               'timestamp': timestamp_normalize(self.id, msg['time']),
-              'openInterest': msg['openInterest']}
+              'openInterest': msg.get('openInterest')}
         current_open_interest = {key: cb[key] for key in ['openInterest'] if key in cb}
-        if (cb['pair'] not in self.__previous_open_interest) or (cb['pair'] in self.__previous_open_interest and self.__previous_open_interest[cb['pair']] != current_open_interest):
-            self.__previous_open_interest[cb['pair']] = current_open_interest
+        if (pair not in self.__previous_open_interest) or (pair in self.__previous_open_interest and self.__previous_open_interest[pair] != current_open_interest):
+            self.__previous_open_interest[pair] = current_open_interest
             await self.callback(OPEN_INTEREST, **cb)
 
     async def message_handler(self, msg: str, timestamp: float):
