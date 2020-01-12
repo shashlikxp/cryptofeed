@@ -110,6 +110,7 @@ class KrakenFutures(Feed):
             self.__previous_ticker[pair] = current_ticker
             await self.callback(TICKER, **cb)
         # await self.callback(TICKER, feed=self.id, pair=pair, bid=msg['bid'], ask=msg['ask'], timestamp=timestamp)
+        # TODO: why is timestamp not chosen to be msg['timestamp']?
 
     async def _book_snapshot(self, msg: dict, pair: str, timestamp: float):
         """
@@ -140,6 +141,8 @@ class KrakenFutures(Feed):
             ASK: sd({Decimal(update['price']): Decimal(update['qty']) for update in msg.get('asks')})
         }
         await self.book_callback(self.l2_book[pair], L2_BOOK, pair, True, None, timestamp)
+        # Kraken Futures delivers the current book snapshot but with an old timestamp (several days) - bug?
+        # we change this timestamp to the timestamp of delivered message (i.e. current timestamp)
 
     async def _book(self, msg: dict, pair: str, timestamp: float):
         """
@@ -177,10 +180,11 @@ class KrakenFutures(Feed):
                   'tag': msg['tag'],
                   'premium': msg.get('premium'),
                   'absolute_rate': msg.get('funding_rate'),
-                  'absolute_rate_prediction': msg.get('funding_rate_prediction'),
+                  'absolute_rate_prediction': msg.get('funding_rate_prediction'),  # this is sometimes None (no prediction)
                   'relative_rate': msg.get('relative_funding_rate'),
                   'relative_rate_prediction': msg.get('relative_funding_rate_prediction'),  # this is sometimes None (no prediction)
                   'next_rate_timestamp': timestamp_normalize(self.id, msg['next_funding_rate_time'])}
+            cb = {key: value for (key, value) in cb.items() if value}    # remove None (otherwise can generate exceptions in backeneds)
             current_funding = {key: cb[key] for key in ['premium', 'absolute_rate', 'absolute_rate_prediction', 'relative_rate', 'relative_rate_prediction'] if key in cb}
             if (pair not in self.__previous_funding) or (pair in self.__previous_funding and self.__previous_funding[pair] != current_funding):
                 self.__previous_funding[pair] = current_funding
@@ -208,7 +212,7 @@ class KrakenFutures(Feed):
             self.__previous_open_interest[pair] = current_open_interest
             await self.callback(OPEN_INTEREST, **cb)
 
-    async def message_handler(self, msg: str, timestamp: float):
+    async def message_handler(self, msg: str, timestamp: float):     # TODO: why two timestamps?
         msg = json.loads(msg, parse_float=Decimal)
         if 'event' in msg:
             if msg['event'] == 'info':
